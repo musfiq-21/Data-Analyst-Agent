@@ -16,6 +16,8 @@ first (all 6 test modules failed on import), then the code was written to make t
 | 6 | `sqlagent/evaluate.py`: checker, pass@1, pass^k, failure labels | `tests/test_eval.py` | |
 | 7 | `data/questions.json`: 19 questions with expected SQL | `tests/test_questions.py` (coverage, computable, no ties) | |
 | 8 | `agent.py` orchestration guards (error hints, refusal-after-error push-back, grounding check, duplicate cache, NULL/multi-row hints, prompt rules 5–7), built from a trace-by-trace analysis of the first run's 22 failures | `tests/test_guards.py` | |
+| 9 | `evaluate.py` strict checker: value must appear in a tool result; tolerance tightened from 1% to 0.1% after a wrong-method 42.15% passed for a true 42.10% | `tests/test_eval.py` (`SupportedByToolsTests`, `test_wrong_method_near_miss_fails`) | |
+| 10 | `REPORT.md` draft, written from the `runs/*/summary.json` and `runs.jsonl` files | No unit test: every number was checked by a script against the run files | |
 
 Found during live testing: Ollama sometimes returns an **empty message** when qwen2.5:3b
 writes a tool call it cannot parse. The first version accepted `""` as the final answer.
