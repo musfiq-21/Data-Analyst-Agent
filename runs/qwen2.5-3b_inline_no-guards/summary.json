@@ -1,0 +1,137 @@
+{
+  "model": "qwen2.5:3b",
+  "sql_mode": "inline",
+  "trials": 3,
+  "temperature": 0.3,
+  "max_steps": 8,
+  "token_budget": 20000,
+  "nudge": true,
+  "guards": false,
+  "rescored": true,
+  "questions": 19,
+  "runs": 57,
+  "pass@1": 0.614,
+  "pass^3": 0.5263,
+  "statuses": {
+    "ok": 57
+  },
+  "failures": {
+    "false_refusal": 9,
+    "wrong_result": 8,
+    "made_up_answer": 5
+  },
+  "guard_pushbacks": {},
+  "runs_with_duplicate_calls": 0,
+  "avg_tokens_per_run": 1971.7,
+  "avg_seconds_per_run": 15.4,
+  "failure_examples": {
+    "wrong_result": {
+      "id": "q05",
+      "trial": 2,
+      "question": "What is the total revenue from customer 12?",
+      "expected": 1192.0,
+      "answer": "The total revenue from customer 12 is $45.00.",
+      "sql": [
+        "SELECT SUM(order_items.quantity * order_items.unit_price) AS total_revenue FROM order_items JOIN orders ON order_items.order_id = orders.id JOIN customers ON orders.customer_id = customers.id WHERE customers.id = 12 GROUP BY orders.id"
+      ]
+    },
+    "false_refusal": {
+      "id": "q11",
+      "trial": 1,
+      "question": "What is the name of the customer who has spent the most money in total?",
+      "expected": "Shakil Hossain",
+      "answer": "CANNOT ANSWER: The query syntax is incorrect. Please provide a corrected query.",
+      "sql": [
+        "SELECT name FROM customers ORDER BY (SELECT SUM(order_items.quantity * order_items.unit_price) FROM order_items INNER JOIN orders ON order_items.order_id = orders.id INNER JOIN customers ON orders.customer_id = customers.id WHERE customers.id = customers_id ORDER BY SUM(order_items.quantity * order_items.unit_price) DESC LIMIT 1;"
+      ]
+    },
+    "made_up_answer": {
+      "id": "q18",
+      "trial": 1,
+      "question": "What was our total profit in 2025?",
+      "expected": null,
+      "answer": "The total profit in 2025 was -1592.10.",
+      "sql": [
+        "SELECT SUM(order_items.quantity * (order_items.unit_price - products.unit_price)) as total_profit FROM orders JOIN order_items ON orders.id = order_items.order_id JOIN products ON order_items.product_id = products.id WHERE strftime('%Y', order_date) = '2025' GROUP BY strftime('%Y', order_date) LIMIT 1"
+      ]
+    }
+  },
+  "per_question": {
+    "q01": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q02": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q03": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q04": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q05": {
+      "passes": 2,
+      "trials": 3
+    },
+    "q06": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q07": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q08": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q09": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q10": {
+      "passes": 0,
+      "trials": 3
+    },
+    "q11": {
+      "passes": 0,
+      "trials": 3
+    },
+    "q12": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q13": {
+      "passes": 0,
+      "trials": 3
+    },
+    "q14": {
+      "passes": 2,
+      "trials": 3
+    },
+    "q15": {
+      "passes": 0,
+      "trials": 3
+    },
+    "q16": {
+      "passes": 0,
+      "trials": 3
+    },
+    "q17": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q18": {
+      "passes": 1,
+      "trials": 3
+    },
+    "q19": {
+      "passes": 0,
+      "trials": 3
+    }
+  }
+}

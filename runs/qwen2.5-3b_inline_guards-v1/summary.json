@@ -1,0 +1,182 @@
+{
+  "model": "qwen2.5:3b",
+  "sql_mode": "inline",
+  "trials": 3,
+  "temperature": 0.3,
+  "max_steps": 8,
+  "token_budget": 20000,
+  "nudge": true,
+  "guards": true,
+  "rescored": true,
+  "questions": 19,
+  "runs": 57,
+  "pass@1": 0.6491,
+  "pass^3": 0.5263,
+  "statuses": {
+    "ok": 56,
+    "step_cap": 1
+  },
+  "failures": {
+    "wrong_result": 7,
+    "made_up_answer": 6,
+    "false_refusal": 4,
+    "step_cap": 1,
+    "sql_error_unrecovered": 1,
+    "answer_not_from_tools": 1
+  },
+  "guard_pushbacks": {
+    "refusal_after_error": 7,
+    "ungrounded_numbers": 10
+  },
+  "runs_with_duplicate_calls": 8,
+  "avg_tokens_per_run": 3412.4,
+  "avg_seconds_per_run": 23.37,
+  "failure_examples": {
+    "wrong_result": {
+      "id": "q10",
+      "trial": 1,
+      "question": "Which product has sold the most units?",
+      "expected": "Ceramic Mug",
+      "answer": "Product with ID 15 has sold the most units with a total of 112 units.",
+      "sql": [
+        "SELECT product_id, SUM(quantity) AS total_units FROM order_items GROUP BY product_id ORDER BY total_units DESC LIMIT 1"
+      ]
+    },
+    "false_refusal": {
+      "id": "q11",
+      "trial": 1,
+      "question": "What is the name of the customer who has spent the most money in total?",
+      "expected": "Shakil Hossain",
+      "answer": "The customer who has spent the most money in total is CANNOT ANSWER: None of the customers have completed orders.",
+      "sql": [
+        "SELECT customer_id FROM orders GROUP BY customer_id ORDER BY SUM(CASE WHEN status = 'completed' THEN order_items.quantity * order_items.unit_price ELSE 0 END) DESC LIMIT 1;",
+        "SELECT name FROM customers WHERE id = (SELECT customer_id FROM orders GROUP BY customer_id ORDER BY SUM(CASE WHEN status = 'completed' THEN order_items.quantity * order_items.unit_price ELSE 0 END) DESC LIMIT 1);",
+        "SELECT name FROM customers WHERE id = (SELECT customer_id FROM orders WHERE status = 'completed' GROUP BY customer_id ORDER BY SUM(order_items.quantity * order_items.unit_price) DESC LIMIT 1);"
+      ]
+    },
+    "step_cap": {
+      "id": "q15",
+      "trial": 1,
+      "question": "What was the percentage growth in revenue from 2024 to 2025?",
+      "expected": -2.5822,
+      "answer": null,
+      "sql": [
+        "SELECT SUM(quantity * unit_price) as revenue FROM order_items JOIN orders ON order_items.order_id = orders.id JOIN customers ON orders.customer_id = customers.id JOIN products ON order_items.product_id = products.id WHERE strftime('%Y', order_date) = '2025' AND customers.id IN (SELECT customer_id FROM orders WHERE strftime('%Y', order_date) = '2024')",
+        "SELECT SUM(quantity * unit_price) as revenue FROM order_items JOIN orders ON order_items.order_id = orders.id JOIN customers ON orders.customer_id = customers.id JOIN products ON order_items.product_id = products.id WHERE strftime('%Y', order_date) = '2024'",
+        "SELECT SUM(quantity * unit_price) as revenue_2025 FROM order_items JOIN orders ON order_items.order_id = orders.id JOIN customers ON orders.customer_id = customers.id JOIN products ON order_items.product_id = products.id WHERE strftime('%Y', order_date) = '2025'",
+        "SELECT SUM(quantity * unit_price) as revenue_2024 FROM order_items JOIN orders ON order_items.order_id = orders.id JOIN customers ON orders.customer_id = customers.id JOIN products ON order_items.product_id = products.id WHERE strftime('%Y', order_date) = '2024'"
+      ]
+    },
+    "sql_error_unrecovered": {
+      "id": "q15",
+      "trial": 3,
+      "question": "What was the percentage growth in revenue from 2024 to 2025?",
+      "expected": -2.5822,
+      "answer": "The percentage growth in revenue from 2024 to 2025 was 150.00%.",
+      "sql": [
+        "SELECT SUM(CASE WHEN strftime('%Y', order_date) = '2024' THEN revenue ELSE 0 END) AS revenue_2024, SUM(CASE WHEN strftime('%Y', order_date) = '2025' THEN revenue ELSE 0 END) AS revenue_2025 FROM (SELECT strftime('%Y', orders.order_date) AS year, SUM(order_items.quantity * order_items.unit_price) AS revenue FROM orders JOIN order_items ON orders.id = order_items.order_id JOIN products ON order_items.product_id = products.id GROUP BY orders.id, strftime('%Y', orders.order_date))"
+      ]
+    },
+    "answer_not_from_tools": {
+      "id": "q16",
+      "trial": 2,
+      "question": "What percent of total revenue came from the Electronics category?",
+      "expected": 42.0993,
+      "answer": "The total revenue is $106,710.00 and the revenue from the Electronics category is $44,975.00. To find the percentage, we use the formula: (44975 / 106710) * 100.\n\nThe calculation is: \n(calculator expression=\"calculator(expression: '(44975 / 106710) * 100', precision: 2)\">\n\nThe answer is 42.11%.",
+      "sql": [
+        "SELECT SUM(p.unit_price * oi.quantity) as total_revenue, SUM(CASE WHEN p.category = 'Electronics' THEN p.unit_price * oi.quantity ELSE 0 END) as electronics_revenue FROM products p JOIN order_items oi ON p.id = oi.product_id",
+        "SELECT SUM(p.unit_price * oi.quantity) FROM products p JOIN order_items oi ON p.id = oi.product_id",
+        "SELECT SUM(CASE WHEN p.category = 'Electronics' THEN p.unit_price * oi.quantity ELSE 0 END) FROM products p JOIN order_items oi ON p.id = oi.product_id"
+      ]
+    },
+    "made_up_answer": {
+      "id": "q18",
+      "trial": 1,
+      "question": "What was our total profit in 2025?",
+      "expected": null,
+      "answer": "The total profit in 2025 was $22,675.00.",
+      "sql": [
+        "SELECT SUM(order_items.quantity * order_items.unit_price) AS total_profit FROM order_items JOIN orders ON order_items.order_id = orders.id JOIN customers ON orders.customer_id = customers.id WHERE strftime('%Y', orders.order_date) = '2025' GROUP BY orders.id",
+        "SELECT SUM(total_profit) AS total_profit FROM (SELECT SUM(order_items.quantity * order_items.unit_price) AS total_profit FROM order_items JOIN orders ON order_items.order_id = orders.id JOIN customers ON orders.customer_id = customers.id WHERE strftime('%Y', orders.order_date) = '2025' GROUP BY orders.id)"
+      ]
+    }
+  },
+  "per_question": {
+    "q01": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q02": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q03": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q04": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q05": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q06": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q07": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q08": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q09": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q10": {
+      "passes": 0,
+      "trials": 3
+    },
+    "q11": {
+      "passes": 0,
+      "trials": 3
+    },
+    "q12": {
+      "passes": 2,
+      "trials": 3
+    },
+    "q13": {
+      "passes": 0,
+      "trials": 3
+    },
+    "q14": {
+      "passes": 2,
+      "trials": 3
+    },
+    "q15": {
+      "passes": 1,
+      "trials": 3
+    },
+    "q16": {
+      "passes": 2,
+      "trials": 3
+    },
+    "q17": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q18": {
+      "passes": 0,
+      "trials": 3
+    },
+    "q19": {
+      "passes": 0,
+      "trials": 3
+    }
+  }
+}

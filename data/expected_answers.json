@@ -1,0 +1,100 @@
+{
+  "q01": {
+    "question": "How many customers are there?",
+    "kind": "number",
+    "value": 50.0
+  },
+  "q02": {
+    "question": "How many products are in the Electronics category?",
+    "kind": "number",
+    "value": 6.0
+  },
+  "q03": {
+    "question": "How many orders have the status 'cancelled'?",
+    "kind": "number",
+    "value": 29.0
+  },
+  "q04": {
+    "question": "What is the average list price of the products in the Books category?",
+    "kind": "number",
+    "value": 43.75
+  },
+  "q05": {
+    "question": "What is the total revenue from customer 12?",
+    "kind": "number",
+    "value": 1192.0
+  },
+  "q06": {
+    "question": "How many orders were placed by customers who live in Dhaka?",
+    "kind": "number",
+    "value": 88.0
+  },
+  "q07": {
+    "question": "How many units of the 'Wireless Mouse' have been sold in total?",
+    "kind": "number",
+    "value": 61.0
+  },
+  "q08": {
+    "question": "Which product category earned the most revenue?",
+    "kind": "text",
+    "value": "Electronics"
+  },
+  "q09": {
+    "question": "Which city has the most customers?",
+    "kind": "text",
+    "value": "Dhaka"
+  },
+  "q10": {
+    "question": "Which product has sold the most units?",
+    "kind": "text",
+    "value": "Ceramic Mug"
+  },
+  "q11": {
+    "question": "What is the name of the customer who has spent the most money in total?",
+    "kind": "text",
+    "value": "Shakil Hossain"
+  },
+  "q12": {
+    "question": "What is the average order value?",
+    "kind": "number",
+    "value": 517.9842
+  },
+  "q13": {
+    "question": "What is the average order value, and by what percent is it above the value of the smallest order?",
+    "kind": "numbers",
+    "value": [
+      517.9842,
+      5655.3806
+    ]
+  },
+  "q14": {
+    "question": "What percentage of all orders were cancelled?",
+    "kind": "number",
+    "value": 14.5
+  },
+  "q15": {
+    "question": "What was the percentage growth in revenue from 2024 to 2025?",
+    "kind": "number",
+    "value": -2.5822
+  },
+  "q16": {
+    "question": "What percent of total revenue came from the Electronics category?",
+    "kind": "number",
+    "value": 42.0993
+  },
+  "q17": {
+    "question": "What is the phone number of customer 5?",
+    "kind": "unanswerable",
+    "value": null
+  },
+  "q18": {
+    "question": "What was our total profit in 2025?",
+    "kind": "unanswerable",
+    "value": null
+  },
+  "q19": {
+    "question": "How many products did customers return in 2025?",
+    "kind": "unanswerable",
+    "value": null
+  }
+}

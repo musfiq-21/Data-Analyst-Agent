@@ -1,0 +1,151 @@
+{
+  "model": "qwen2.5:3b",
+  "sql_mode": "tool",
+  "trials": 3,
+  "temperature": 0.3,
+  "max_steps": 8,
+  "token_budget": 20000,
+  "nudge": true,
+  "guards": true,
+  "rescored": true,
+  "questions": 19,
+  "runs": 57,
+  "pass@1": 0.6842,
+  "pass^3": 0.5263,
+  "statuses": {
+    "ok": 57
+  },
+  "failures": {
+    "wrong_result": 9,
+    "false_refusal": 7,
+    "sql_error_unrecovered": 1,
+    "made_up_answer": 1
+  },
+  "guard_pushbacks": {
+    "refusal_after_error": 7,
+    "ungrounded_numbers": 3
+  },
+  "runs_with_duplicate_calls": 5,
+  "avg_tokens_per_run": 3757.1,
+  "avg_seconds_per_run": 29.94,
+  "failure_examples": {
+    "wrong_result": {
+      "id": "q05",
+      "trial": 1,
+      "question": "What is the total revenue from customer 12?",
+      "expected": 1192.0,
+      "answer": "381.00",
+      "sql": [
+        "SELECT SUM(unit_price * quantity) AS total_revenue\nFROM order_items\nWHERE order_id IN (\n    SELECT id\n    FROM orders\n    WHERE customer_id = 12 AND status = 'completed'\n)"
+      ]
+    },
+    "false_refusal": {
+      "id": "q08",
+      "trial": 2,
+      "question": "Which product category earned the most revenue?",
+      "expected": "Electronics",
+      "answer": "CANNOT ANSWER: The question cannot be answered with the current schema.",
+      "sql": [
+        "SELECT p.category, SUM(o.revenue) AS total_revenue\nFROM orders o\nJOIN (\n    SELECT order_id, SUM(quantity * unit_price) AS revenue\n    FROM order_items\n    GROUP BY order_id\n) o_items ON o.id = o_items.order_id\nJOIN products p ON p.id = order_items.product_id\nGROUP BY p.category\nORDER BY total_revenue DESC\nLIMIT 1"
+      ]
+    },
+    "sql_error_unrecovered": {
+      "id": "q16",
+      "trial": 3,
+      "question": "What percent of total revenue came from the Electronics category?",
+      "expected": 42.0993,
+      "answer": "The percent of total revenue from the Electronics category is 25.00%.",
+      "sql": [
+        "SELECT\n    SUM(CASE WHEN products.category = 'Electronics' THEN revenue ELSE 0 END) / SUM(revenue) * 100 AS Electronics_Revenue_Pct\nFROM\n    (\n        SELECT\n            SUM(order_items.quantity * order_items.unit_price) AS revenue,\n            o.customer_id\n        FROM\n            orders o\n        JOIN\n            order_items oi ON o.id = oi.order_id\n        GROUP BY\n            o.customer_id\n    ) o\nJOIN\n    (\n        SELECT\n            SUM(order_items.quantity * order_items.unit_price) AS revenue,\n            p.id AS product_id\n        FROM\n            orders o\n        JOIN\n            order_items oi ON o.id = oi.order_id\n        JOIN\n            products p ON oi.product_id = p.id\n        WHERE\n            p.category = 'Electronics'\n        GROUP BY\n            p.id\n    ) e\nON\n    o.customer_id = e.product_id"
+      ]
+    },
+    "made_up_answer": {
+      "id": "q18",
+      "trial": 3,
+      "question": "What was our total profit in 2025?",
+      "expected": null,
+      "answer": "51120.90",
+      "sql": [
+        "SELECT SUM(T1.revenue) AS total_revenue_2025\nFROM (\n    SELECT o.id, SUM(T2.quantity * T2.unit_price) AS revenue\n    FROM orders o\n    JOIN order_items T2 ON o.id = T2.order_id\n    WHERE strftime('%Y', o.order_date) = '2025'\n    GROUP BY o.id\n) T1"
+      ]
+    }
+  },
+  "per_question": {
+    "q01": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q02": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q03": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q04": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q05": {
+      "passes": 0,
+      "trials": 3
+    },
+    "q06": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q07": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q08": {
+      "passes": 1,
+      "trials": 3
+    },
+    "q09": {
+      "passes": 2,
+      "trials": 3
+    },
+    "q10": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q11": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q12": {
+      "passes": 1,
+      "trials": 3
+    },
+    "q13": {
+      "passes": 0,
+      "trials": 3
+    },
+    "q14": {
+      "passes": 1,
+      "trials": 3
+    },
+    "q15": {
+      "passes": 2,
+      "trials": 3
+    },
+    "q16": {
+      "passes": 0,
+      "trials": 3
+    },
+    "q17": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q18": {
+      "passes": 2,
+      "trials": 3
+    },
+    "q19": {
+      "passes": 3,
+      "trials": 3
+    }
+  }
+}

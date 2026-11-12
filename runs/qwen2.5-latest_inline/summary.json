@@ -1,0 +1,142 @@
+{
+  "model": "qwen2.5:latest",
+  "sql_mode": "inline",
+  "trials": 3,
+  "temperature": 0.3,
+  "max_steps": 8,
+  "token_budget": 20000,
+  "nudge": true,
+  "guards": true,
+  "rescored": true,
+  "questions": 19,
+  "runs": 57,
+  "pass@1": 0.7895,
+  "pass^3": 0.7368,
+  "statuses": {
+    "ok": 57
+  },
+  "failures": {
+    "made_up_answer": 6,
+    "wrong_result": 4,
+    "false_refusal": 2
+  },
+  "guard_pushbacks": {
+    "ungrounded_numbers": 7
+  },
+  "runs_with_duplicate_calls": 0,
+  "avg_tokens_per_run": 2440.8,
+  "avg_seconds_per_run": 27.05,
+  "failure_examples": {
+    "wrong_result": {
+      "id": "q12",
+      "trial": 1,
+      "question": "What is the average order value?",
+      "expected": 517.9842,
+      "answer": "The average order value is 208.44.",
+      "sql": [
+        "SELECT AVG(quantity * unit_price) AS average_order_value FROM order_items"
+      ]
+    },
+    "false_refusal": {
+      "id": "q13",
+      "trial": 1,
+      "question": "What is the average order value, and by what percent is it above the value of the smallest order?",
+      "expected": [
+        517.9842,
+        5655.3806
+      ],
+      "answer": "CANNOT ANSWER: The database does not record the revenue directly in a column named 'revenue'. We need to calculate it using the `unit_price` and `quantity` from the `order_items` table. However, the schema does not provide a direct way to calculate the revenue for each order, so we cannot answer the question with the given data.",
+      "sql": [
+        "SELECT AVG(T1.revenue) AS avg_order_value, MIN(T1.revenue) AS min_order_value FROM (SELECT SUM(T2.quantity * T2.unit_price) AS revenue FROM order_items AS T2 JOIN orders AS T1 ON T2.order_id = T1.id GROUP BY T1.id) AS subquery"
+      ]
+    },
+    "made_up_answer": {
+      "id": "q18",
+      "trial": 1,
+      "question": "What was our total profit in 2025?",
+      "expected": null,
+      "answer": "The total profit in 2025 was -1592.10.",
+      "sql": [
+        "SELECT SUM(order_items.quantity * order_items.unit_price - products.unit_price * order_items.quantity) AS total_profit FROM order_items JOIN orders ON order_items.order_id = orders.id JOIN products ON order_items.product_id = products.id WHERE strftime('%Y', orders.order_date) = '2025'"
+      ]
+    }
+  },
+  "per_question": {
+    "q01": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q02": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q03": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q04": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q05": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q06": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q07": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q08": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q09": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q10": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q11": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q12": {
+      "passes": 0,
+      "trials": 3
+    },
+    "q13": {
+      "passes": 1,
+      "trials": 3
+    },
+    "q14": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q15": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q16": {
+      "passes": 2,
+      "trials": 3
+    },
+    "q17": {
+      "passes": 3,
+      "trials": 3
+    },
+    "q18": {
+      "passes": 0,
+      "trials": 3
+    },
+    "q19": {
+      "passes": 0,
+      "trials": 3
+    }
+  }
+}
