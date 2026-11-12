@@ -138,9 +138,10 @@ At most 50 rows are returned (`truncated: true` is set when rows were cut).
 to the model as the tool result text, so it can fix the call and retry within the step cap.
 
 **Token counting.** The counts are Ollama's own `prompt_eval_count` and `eval_count`, summed per
-run, including the inner `generate_sql` calls. Ollama reuses its KV cache for a shared
-prompt prefix, so later steps in a conversation can report fewer prompt tokens than the
-full prompt length. The budget uses exactly what Ollama reports.
+run, including the inner `generate_sql` calls. On Ollama 0.40.16, `prompt_eval_count` was
+measured to be the full prompt length even when the prompt is cached; the cache only makes
+the call faster (see Assignment 2). Every step therefore counts the whole conversation so
+far, and the budget uses exactly what Ollama reports.
 
 **Ollama settings.** `temperature 0.3` (so the 3 trials can differ; a fixed temperature of 0
 would make pass@1 = pass^3 trivially), `num_ctx 8192` (the schema, tools and a few steps
