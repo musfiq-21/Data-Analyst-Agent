@@ -72,6 +72,8 @@ class ClientTests(unittest.TestCase):
     def test_slide_cost_example(self):
         # Lecture 2 slide 20, no-cache row: 8,000 in + 400 out = $0.0192
         self.assertAlmostEqual(notional_cost(8000, 400), 0.0192)
+        # prefix-hit row: 2,000 new + 6,000 cached input + 400 out = $0.0102
+        self.assertAlmostEqual(notional_cost(8000, 400, cached_tokens=6000), 0.0102)
 
 
 if __name__ == "__main__":

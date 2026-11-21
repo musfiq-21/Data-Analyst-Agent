@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 # Notional teaching rates, USD per million tokens (Lecture 2, slide 20).
 # Local Ollama has no real price; this makes runs comparable to a hosted API.
-RATES_PER_MILLION = {"input": 2.00, "output": 8.00}
+RATES_PER_MILLION = {"input": 2.00, "cached_input": 0.50, "output": 8.00}
 
 DEFAULT_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 if not DEFAULT_HOST.startswith("http"):
@@ -50,8 +50,12 @@ def parse_response(data):
                       done_reason=data.get("done_reason") or "")
 
 
-def notional_cost(prompt_tokens, completion_tokens, rates=RATES_PER_MILLION):
-    return (prompt_tokens * rates["input"] + completion_tokens * rates["output"]) / 1_000_000
+def notional_cost(prompt_tokens, completion_tokens, cached_tokens=0, rates=RATES_PER_MILLION):
+    """cached_tokens: the part of prompt_tokens served from a reused prefix (slide 19).
+    Ollama's API does not report it, so the ledger prices every call as uncached."""
+    uncached = prompt_tokens - cached_tokens
+    return (uncached * rates["input"] + cached_tokens * rates["cached_input"]
+            + completion_tokens * rates["output"]) / 1_000_000
 
 
 def _http_post(url, payload, timeout):
