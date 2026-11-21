@@ -1,7 +1,7 @@
 """Ollama wrapper: request shape and token counting, tested with a fake transport."""
 import unittest
 
-from sqlagent.llm import OllamaChat, parse_response
+from sqlagent.llm import OllamaChat, notional_cost, parse_response
 
 
 class ParseTests(unittest.TestCase):
@@ -48,6 +48,30 @@ class ClientTests(unittest.TestCase):
         self.assertNotIn("tools", sent[1][1])
         self.assertEqual(len(llm.ledger), 2)
         self.assertEqual(llm.total_tokens(), 20)
+
+
+    def test_format_passed_and_cost_recorded(self):
+        sent = []
+
+        def transport(url, payload, timeout):
+            sent.append(payload)
+            return {"message": {"content": "{}"}, "prompt_eval_count": 1000,
+                    "eval_count": 100, "done_reason": "length"}
+
+        llm = OllamaChat("qwen2.5:3b", transport=transport)
+        schema = {"type": "object"}
+        r = llm.chat([{"role": "user", "content": "x"}], format=schema)
+        llm.chat([{"role": "user", "content": "y"}])
+        self.assertEqual(sent[0]["format"], schema)
+        self.assertNotIn("format", sent[1])
+        self.assertEqual(r.done_reason, "length")
+        # 1000 in x $2/M + 100 out x $8/M = $0.0028
+        self.assertAlmostEqual(llm.ledger[0]["cost_usd"], 0.0028)
+        self.assertAlmostEqual(llm.total_cost(), 0.0056)
+
+    def test_slide_cost_example(self):
+        # Lecture 2 slide 20, no-cache row: 8,000 in + 400 out = $0.0192
+        self.assertAlmostEqual(notional_cost(8000, 400), 0.0192)
 
 
 if __name__ == "__main__":

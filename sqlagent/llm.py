@@ -12,6 +12,10 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 
+# Notional teaching rates, USD per million tokens (Lecture 2, slide 20).
+# Local Ollama has no real price; this makes runs comparable to a hosted API.
+RATES_PER_MILLION = {"input": 2.00, "output": 8.00}
+
 DEFAULT_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 if not DEFAULT_HOST.startswith("http"):
     DEFAULT_HOST = "http://" + DEFAULT_HOST
@@ -24,6 +28,7 @@ class ChatResult:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     seconds: float = 0.0
+    done_reason: str = ""  # "stop", or "length" when num_predict cut the output off
 
 
 def parse_response(data):
@@ -41,7 +46,12 @@ def parse_response(data):
         calls.append({"name": fn.get("name", ""), "arguments": args})
     return ChatResult(content=msg.get("content") or "", tool_calls=calls,
                       prompt_tokens=int(data.get("prompt_eval_count") or 0),
-                      completion_tokens=int(data.get("eval_count") or 0))
+                      completion_tokens=int(data.get("eval_count") or 0),
+                      done_reason=data.get("done_reason") or "")
+
+
+def notional_cost(prompt_tokens, completion_tokens, rates=RATES_PER_MILLION):
+    return (prompt_tokens * rates["input"] + completion_tokens * rates["output"]) / 1_000_000
 
 
 def _http_post(url, payload, timeout):
@@ -71,19 +81,27 @@ class OllamaChat:
         self.transport = transport
         self.ledger = []  # one entry per call
 
-    def chat(self, messages, tools=None):
+    def chat(self, messages, tools=None, format=None):
+        """format: "json" or a JSON schema dict; Ollama then constrains decoding to it."""
         payload = {"model": self.model, "messages": messages, "stream": False,
                    "options": dict(self.options)}
         if tools:
             payload["tools"] = tools
+        if format is not None:
+            payload["format"] = format
         t0 = time.perf_counter()
         data = self.transport(self.url, payload, self.timeout)
         result = parse_response(data)
         result.seconds = time.perf_counter() - t0
         self.ledger.append({"model": self.model, "prompt_tokens": result.prompt_tokens,
                             "completion_tokens": result.completion_tokens,
-                            "seconds": round(result.seconds, 3)})
+                            "seconds": round(result.seconds, 3),
+                            "done_reason": result.done_reason,
+                            "cost_usd": notional_cost(result.prompt_tokens, result.completion_tokens)})
         return result
 
     def total_tokens(self):
         return sum(e["prompt_tokens"] + e["completion_tokens"] for e in self.ledger)
+
+    def total_cost(self):
+        return sum(e["cost_usd"] for e in self.ledger)

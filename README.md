@@ -17,7 +17,7 @@ python -m sqlagent.evaluate
 ```
 
 `build_db` rebuilds `data/shop.db` from seed 42 (identical data on every machine).
-`unittest` runs 89 offline tests (no Ollama needed; the model is faked).
+`unittest` runs 91 offline tests (no Ollama needed; the model is faked).
 `evaluate` runs 19 questions × 3 trials and writes `runs/qwen2.5-3b_inline/`.
 
 > Windows: if `python` opens the Microsoft Store, use `py` instead, or turn off the

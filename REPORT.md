@@ -145,7 +145,7 @@ when to say no.
 
 ## 6. Reproduce
 
-The 5 commands in `README.md` rebuild the database, run the 89 offline tests and run the
+The 5 commands in `README.md` rebuild the database, run the 91 offline tests and run the
 evaluation. The `--model`, `--sql-mode` and `--no-guards` flags reproduce the other rows.
 
 AI-assistant use is logged in `AI_LOG.md`.
