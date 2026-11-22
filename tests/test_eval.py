@@ -1,7 +1,7 @@
 """Answer checking and pass@1 / pass^k arithmetic. Written before evaluate.py."""
 import unittest
 
-from sqlagent.evaluate import (check_answer, classify_failure, pass_at_1, pass_hat_k,
+from sqlagent.evaluate import (check_answer, classify_failure, pass_at_1, pass_at_k, pass_hat_k,
                                supported_by_tools)
 
 
@@ -87,6 +87,20 @@ class MetricTests(unittest.TestCase):
         results = {"q1": [True, True, True], "q2": [True, False, True], "q3": [False] * 3}
         self.assertAlmostEqual(pass_at_1(results), 5 / 9)
         self.assertAlmostEqual(pass_hat_k(results), 1 / 3)
+
+    def test_pass_at_k(self):
+        results = {"q1": [True, True, True], "q2": [True, False, True], "q3": [False] * 3}
+        self.assertAlmostEqual(pass_at_k(results, 3), 2 / 3)  # q1, q2 passed at least once
+        self.assertAlmostEqual(pass_at_k(results, 1), pass_at_1(results))
+        # 2 passes of 3: any 2 attempts include a pass, C(1,2)/C(3,2) = 0, so pass@2 = 1
+        self.assertAlmostEqual(pass_at_k({"q2": [True, False, True]}, 2), 1.0)
+        self.assertAlmostEqual(pass_at_k({"q": [True, False, False]}, 2), 1 - 1 / 3)
+
+    def test_metric_order(self):
+        # pass^k <= pass@1 <= pass@k always
+        results = {"a": [True, False, True], "b": [False, False, True], "c": [True] * 3}
+        self.assertLessEqual(pass_hat_k(results), pass_at_1(results))
+        self.assertLessEqual(pass_at_1(results), pass_at_k(results, 3))
 
 
 class FailureTests(unittest.TestCase):

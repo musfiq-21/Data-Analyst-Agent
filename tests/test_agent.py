@@ -1,4 +1,5 @@
 """The hand-written agent loop: tools, step cap, budget cap, statuses. Written before agent.py."""
+import json
 import os
 import tempfile
 import unittest
@@ -21,6 +22,8 @@ class AgentLoopTests(unittest.TestCase):
 
     def agent(self, replies, **kw):
         llm = FakeLLM(replies, raise_on=kw.pop("raise_on", None))
+        self.slept = []
+        kw.setdefault("sleep", self.slept.append)  # record backoff instead of waiting
         return Agent(llm, self.db, **kw), llm
 
     def test_tool_then_answer_is_ok(self):
@@ -113,6 +116,87 @@ class AgentLoopTests(unittest.TestCase):
         agent, _ = self.agent([reply(content="CANNOT ANSWER", prompt_tokens=1000,
                                      completion_tokens=100)])
         self.assertAlmostEqual(agent.run("q")["cost_usd"], 0.0028)
+
+    def test_retry_backs_off_exponentially(self):
+        agent, _ = self.agent([reply(content="CANNOT ANSWER")], raise_on={0, 1, 2},
+                              retry_backoff=1.0)
+        run = agent.run("q")
+        self.assertEqual(run["status"], "ok")
+        self.assertEqual(self.slept, [1.0, 2.0, 4.0])
+        self.assertEqual(run["retry_reasons"], ["model_call:ConnectionError"] * 3)
+
+    def test_permanent_error_is_not_retried(self):
+        from sqlagent.llm import OllamaHTTPError
+
+        class NotFound(FakeLLM):
+            def chat(self, messages, tools=None):
+                self.seen.append(messages)
+                raise OllamaHTTPError(404, "model 'qwen9' not found")
+
+        llm = NotFound([])
+        run = Agent(llm, self.db, sleep=self.no_sleep).run("q")
+        self.assertEqual(run["status"], "error")
+        self.assertEqual(len(llm.seen), 1)  # retrying a 404 cannot help
+        self.assertEqual(run["retries"], 0)
+
+    def test_server_error_is_retried(self):
+        from sqlagent.agent import is_retryable
+        from sqlagent.llm import OllamaHTTPError
+        self.assertTrue(is_retryable(OllamaHTTPError(503, "busy")))
+        self.assertTrue(is_retryable(OllamaHTTPError(429, "slow down")))
+        self.assertTrue(is_retryable(TimeoutError()))
+        self.assertFalse(is_retryable(OllamaHTTPError(400, "bad request")))
+        self.assertFalse(is_retryable(ValueError("bug")))
+
+    def test_truncated_reply_is_retried_not_accepted(self):
+        cut = reply(content="The total revenue is 12")
+        cut.done_reason = "length"
+        agent, llm = self.agent([cut, reply(content="CANNOT ANSWER")])
+        run = agent.run("q")
+        self.assertEqual(run["final_answer"], "CANNOT ANSWER")
+        self.assertEqual(run["retry_reasons"], ["truncated"])
+        self.assertIn("cut off", llm.seen[1]["messages"][-1]["content"])
+
+    def test_invalid_arguments_are_rejected_with_the_schema(self):
+        agent, llm = self.agent([
+            reply(tool_calls=[call("run_sql", query=42)]),
+            reply(tool_calls=[call("calculator")]),
+            reply(content="CANNOT ANSWER"),
+        ])
+        run = agent.run("q")
+        first = json.loads(llm.seen[1]["messages"][-1]["content"])["error"]
+        self.assertIn("$.query must be string", first)
+        self.assertIn('"query"', first)  # the schema to follow is in the message
+        self.assertIn("missing required field 'expression'",
+                      llm.seen[2]["messages"][-1]["content"])
+        self.assertEqual(run["invalid_tool_calls"], 2)
+        self.assertEqual(run["retry_reasons"], ["invalid_tool_call"] * 2)
+        self.assertEqual(run["sql"], [])  # the bad query never reached the database
+
+    def test_invalid_calls_stop_at_retry_cap(self):
+        bad = [reply(tool_calls=[call("calculator", expression="")]) for _ in range(6)]
+        agent, _ = self.agent(bad, max_retries=2, guards=False)
+        run = agent.run("q")
+        self.assertEqual(run["status"], "retry_cap")
+        self.assertEqual(run["retries"], 2)
+
+    def test_sql_alias_is_accepted(self):
+        agent, _ = self.agent([reply(tool_calls=[call("run_sql", sql="SELECT 1")]),
+                               reply(content="1")])
+        self.assertEqual(agent.run("q")["sql"], ["SELECT 1"])
+
+    def test_malformed_tool_output_is_caught(self):
+        agent, llm = self.agent([reply(tool_calls=[call("calculator", expression="1+1")]),
+                                 reply(content="CANNOT ANSWER")])
+        broken = agent.registry["calculator"]
+        from dataclasses import replace
+        agent.registry["calculator"] = replace(broken, fn=lambda a: {"ok": True})
+        run = agent.run("q")
+        self.assertEqual(run["tool_output_errors"], 1)
+        self.assertIn("malformed output", llm.seen[1]["messages"][-1]["content"])
+
+    def no_sleep(self, *_):
+        raise AssertionError("should not sleep")
 
     def test_empty_replies_stop_at_retry_cap(self):
         agent, _ = self.agent([reply(content="") for _ in range(6)], max_retries=3)

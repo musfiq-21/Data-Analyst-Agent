@@ -58,6 +58,15 @@ def notional_cost(prompt_tokens, completion_tokens, cached_tokens=0, rates=RATES
             + completion_tokens * rates["output"]) / 1_000_000
 
 
+class OllamaHTTPError(RuntimeError):
+    """Ollama answered with an HTTP error. `status` tells a retry policy whether trying
+    again can help (429 / 5xx) or not (404 model not found, 400 bad request)."""
+
+    def __init__(self, status, detail):
+        super().__init__(f"ollama HTTP {status}: {detail}")
+        self.status = status
+
+
 def _http_post(url, payload, timeout):
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
@@ -66,7 +75,7 @@ def _http_post(url, payload, timeout):
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")
-        raise RuntimeError(f"ollama HTTP {e.code}: {detail}") from e
+        raise OllamaHTTPError(e.code, detail) from e
     except urllib.error.URLError as e:
         raise ConnectionError(f"cannot reach ollama at {url}: {e.reason}. "
                               "Is `ollama serve` running?") from e

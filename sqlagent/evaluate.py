@@ -1,4 +1,4 @@
-"""Run the question set N times, check answers, and report pass@1 / pass^k.
+"""Run the question set N times, check answers, and report pass@1, pass@k and pass^k.
 
     python -m sqlagent.evaluate                       # qwen2.5:3b, 3 trials, inline mode
     python -m sqlagent.evaluate --model qwen2.5:latest
@@ -21,6 +21,7 @@ Outputs go to runs/<tag>/: runs.jsonl (one record per run), summary.json, summar
 import argparse
 import json
 import math
+from math import comb
 import os
 import sqlite3
 import sys
@@ -93,6 +94,15 @@ def pass_at_1(results):
     return sum(per_q) / len(per_q) if per_q else 0.0
 
 
+def pass_at_k(results, k):
+    """Chance that at least one of k attempts passes ("can it ever do it?"), averaged
+    over questions. Unbiased estimator from n trials with c passes (Chen et al. 2021):
+    1 - C(n-c, k) / C(n, k). With k = n it is the share of questions passed at least once."""
+    vals = [1 - comb(len(r) - sum(r), k) / comb(len(r), k) for r in results.values()
+            if len(r) >= k]
+    return sum(vals) / len(vals) if vals else 0.0
+
+
 def pass_hat_k(results):
     """Share of questions where *every* trial passed."""
     vals = [all(r) for r in results.values() if r]
@@ -151,13 +161,14 @@ def load_questions(path=QUESTIONS):
 def summarize(records, meta, questions):
     """Build summary dict from judged run records."""
     results = defaultdict(list)
-    failures, statuses, pushbacks = Counter(), Counter(), Counter()
+    failures, statuses, pushbacks, retry_reasons = Counter(), Counter(), Counter(), Counter()
     examples = {}
     total_tokens = total_seconds = dup_runs = total_retries = 0
     total_cost = 0.0
     for r in records:
         total_cost += r.get("cost_usd", 0.0)
         total_retries += r.get("retries", 0)
+        retry_reasons.update(r.get("retry_reasons", []))
         results[r["id"]].append(r["passed"])
         statuses[r["status"]] += 1
         total_tokens += r["total_tokens"]
@@ -177,6 +188,7 @@ def summarize(records, meta, questions):
         **meta,
         "questions": len(results), "runs": n,
         "pass@1": round(pass_at_1(results), 4),
+        f"pass@{k}": round(pass_at_k(results, k), 4),
         f"pass^{k}": round(pass_hat_k(results), 4),
         "statuses": dict(statuses), "failures": dict(failures.most_common()),
         "guard_pushbacks": dict(pushbacks), "runs_with_duplicate_calls": dup_runs,
@@ -185,6 +197,9 @@ def summarize(records, meta, questions):
         "total_cost_usd": round(total_cost, 6),
         "avg_cost_usd_per_run": round(total_cost / max(n, 1), 6),
         "total_retries": total_retries,
+        "retry_reasons": dict(retry_reasons),
+        "invalid_tool_calls": sum(r.get("invalid_tool_calls", 0) for r in records),
+        "tool_output_errors": sum(r.get("tool_output_errors", 0) for r in records),
         "failure_examples": examples,
         "per_question": {qid: {"passes": sum(results[qid]), "trials": len(results[qid])}
                          for qid in order},
@@ -204,7 +219,8 @@ def write_outputs(out_dir, records, summary, questions):
 def print_summary(s, log_path):
     k = s["trials"]
     print()
-    print(f"pass@1 = {s['pass@1']:.3f}   pass^{k} = {s[f'pass^{k}']:.3f}   "
+    print(f"pass@1 = {s['pass@1']:.3f}   pass@{k} = {s[f'pass@{k}']:.3f}   "
+          f"pass^{k} = {s[f'pass^{k}']:.3f}   "
           f"over {s['questions']} questions x {k}")
     print(f"statuses: {s['statuses']}   failures: {s['failures']}")
     print(f"log: {log_path}")
@@ -214,7 +230,8 @@ def render_markdown(s, questions):
     k = s["trials"]
     lines = [f"# Eval summary: {s['model']} ({s['sql_mode']} mode)", "",
              f"- pass@1: **{s['pass@1']:.3f}**",
-             f"- pass^{k}: **{s[f'pass^{k}']:.3f}**",
+             f"- pass@{k}: **{s[f'pass@{k}']:.3f}** (passed in at least one of {k} trials)",
+             f"- pass^{k}: **{s[f'pass^{k}']:.3f}** (passed in all {k} trials)",
              f"- runs: {s['runs']} ({s['questions']} questions x {k}), "
              f"temperature {s['temperature']}, nudge {s['nudge']}, guards {s['guards']}",
              f"- statuses: {s['statuses']}",
@@ -224,7 +241,9 @@ def render_markdown(s, questions):
              f"avg seconds/run: {s['avg_seconds_per_run']}",
              f"- notional cost: {s.get('total_cost_usd', 0):.4f} USD total, "
              f"{s.get('avg_cost_usd_per_run', 0):.6f} USD/run; "
-             f"retries: {s.get('total_retries', 0)}", "",
+             f"retries: {s.get('total_retries', 0)} {s.get('retry_reasons', {})}",
+             f"- invalid tool calls (failed input schema): {s.get('invalid_tool_calls', 0)}, "
+             f"malformed tool outputs: {s.get('tool_output_errors', 0)}", "",
              "| id | category | passes |", "|---|---|---|"]
     cats = {q["id"]: q["category"] for q in questions}
     for qid, r in s["per_question"].items():

@@ -13,7 +13,9 @@ import math
 import operator
 import re
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, Optional
 
 DEFAULT_ROW_LIMIT = 50
 
@@ -179,3 +181,108 @@ def describe_table(db_path, table=None):
 def to_text(result):
     """Serialise a tool result for the model (compact JSON)."""
     return json.dumps(result, ensure_ascii=False, default=str)
+
+
+# ---------------------------------------------------------------- tool contract
+
+@dataclass(frozen=True)
+class Tool:
+    """One tool: what the model sees (name, description, input_schema) and what the
+    agent checks. Arguments are validated against input_schema BEFORE fn runs, and the
+    result against output_schema AFTER, so a bad call or a broken tool never passes
+    silently. fn takes the validated arguments dict and returns a result dict."""
+    name: str
+    description: str
+    input_schema: dict
+    output_schema: dict
+    fn: Optional[Callable] = None
+
+    def spec(self):
+        """The Ollama / OpenAI-style tool definition sent to the model."""
+        return {"type": "function", "function": {
+            "name": self.name, "description": self.description,
+            "parameters": self.input_schema}}
+
+
+_TYPES = {"string": str, "integer": int, "number": (int, float), "boolean": bool,
+          "array": list, "object": dict, "null": type(None)}
+
+
+def _is_type(value, name):
+    if isinstance(value, bool) and name in ("integer", "number"):
+        return False  # True is an int in Python, not a number in JSON
+    return isinstance(value, _TYPES[name])
+
+
+def validate(value, schema, path="$"):
+    """Check value against the JSON Schema subset the tools use: type (or a list of
+    types), properties, required, items, enum, minLength, anyOf. Returns a list of
+    readable errors (empty = valid). Standard library only, like the rest of the agent.
+    shortcut: no $ref/pattern/format/numeric bounds; use the jsonschema package if a
+    tool needs them."""
+    types = schema.get("type")
+    if types:
+        types = [types] if isinstance(types, str) else types
+        if not any(_is_type(value, t) for t in types):
+            return [f"{path} must be {' or '.join(types)}, got {type(value).__name__}"]
+    if "anyOf" in schema:
+        options = [validate(value, sub, path) for sub in schema["anyOf"]]
+        if all(options):
+            return [f"{path} matches none of the allowed shapes: "
+                    + " | ".join("; ".join(o) for o in options)]
+    errors = []
+    if "enum" in schema and value not in schema["enum"]:
+        errors.append(f"{path} must be one of {schema['enum']}, got {value!r}")
+    if isinstance(value, str) and len(value) < schema.get("minLength", 0):
+        errors.append(f"{path} must not be empty")
+    if isinstance(value, dict):
+        errors += [f"{path} is missing required field {k!r}"
+                   for k in schema.get("required", []) if k not in value]
+        for k, sub in schema.get("properties", {}).items():
+            if k in value:
+                errors += validate(value[k], sub, f"{path}.{k}")
+    if isinstance(value, list) and "items" in schema:
+        for i, item in enumerate(value):
+            errors += validate(item, schema["items"], f"{path}[{i}]")
+    return errors
+
+
+def _args(props, required):
+    return {"type": "object", "properties": props, "required": required}
+
+
+def _result(**ok_fields):
+    """Output schema: either {"ok": true, <ok_fields>} or {"ok": false, "error": str}."""
+    return {"anyOf": [
+        {"type": "object", "required": ["ok", *ok_fields],
+         "properties": {"ok": {"type": "boolean", "enum": [True]}, **ok_fields}},
+        {"type": "object", "required": ["ok", "error"],
+         "properties": {"ok": {"type": "boolean", "enum": [False]},
+                        "error": {"type": "string"}}}]}
+
+
+RUN_SQL = Tool(
+    "run_sql", "Run ONE read-only SQLite SELECT query and return the rows "
+    "(or an error message).",
+    _args({"query": {"type": "string", "minLength": 1,
+                     "description": "A single SELECT statement"}}, ["query"]),
+    _result(columns={"type": "array", "items": {"type": "string"}},
+            rows={"type": "array", "items": {"type": "array"}},
+            row_count={"type": "integer"}, truncated={"type": "boolean"}))
+CALCULATOR = Tool(
+    "calculator", "Evaluate an arithmetic expression, e.g. "
+    "'(1250 - 1000) / 1000 * 100'. Supports + - * / ** ( ) round abs min max.",
+    _args({"expression": {"type": "string", "minLength": 1}}, ["expression"]),
+    _result(expression={"type": "string"}, result={"type": "number"}))
+DESCRIBE_TABLE = Tool(
+    "describe_table", "Look up the schema. With no table, lists tables. "
+    "With a table name, returns its columns.",
+    _args({"table": {"type": "string", "description": "optional table name"}}, []),
+    {"anyOf": [_result(tables={"type": "array", "items": {"type": "string"}}),
+               _result(table={"type": "string"}, schema={"type": "string"})]})
+GENERATE_SQL = Tool(
+    "generate_sql", "Write a SQLite SELECT query for a data request. "
+    "Returns the SQL text; run it with run_sql.",
+    _args({"question": {"type": "string", "minLength": 1,
+                        "description": "What data the query must return"}}, ["question"]),
+    _result(sql={"type": "string", "minLength": 1}))

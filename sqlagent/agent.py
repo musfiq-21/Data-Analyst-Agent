@@ -12,10 +12,12 @@ Either way the numbers come from run_sql / calculator results, never from the mo
 import json
 import re
 import time
+from dataclasses import replace
 
-from sqlagent.llm import notional_cost
-from sqlagent.tools import (DEFAULT_ROW_LIMIT, calculator, column_index, describe_table,
-                            get_schema, run_sql, to_text)
+from sqlagent.llm import OllamaHTTPError, notional_cost
+from sqlagent.tools import (CALCULATOR, DEFAULT_ROW_LIMIT, DESCRIBE_TABLE, GENERATE_SQL,
+                            RUN_SQL, calculator, column_index, describe_table, get_schema,
+                            run_sql, to_text, validate)
 
 DEFINITIONS = """\
 Definitions:
@@ -78,28 +80,6 @@ Schema:
 {schema}"""
 
 
-def _fn(name, description, props, required):
-    return {"type": "function", "function": {
-        "name": name, "description": description,
-        "parameters": {"type": "object", "properties": props, "required": required}}}
-
-
-TOOL_RUN_SQL = _fn("run_sql", "Run ONE read-only SQLite SELECT query and return the rows "
-                   "(or an error message).",
-                   {"query": {"type": "string", "description": "A single SELECT statement"}},
-                   ["query"])
-TOOL_CALC = _fn("calculator", "Evaluate an arithmetic expression, e.g. "
-                "'(1250 - 1000) / 1000 * 100'. Supports + - * / ** ( ) round abs min max.",
-                {"expression": {"type": "string"}}, ["expression"])
-TOOL_DESCRIBE = _fn("describe_table", "Look up the schema. With no table, lists tables. "
-                    "With a table name, returns its columns.",
-                    {"table": {"type": "string", "description": "optional table name"}}, [])
-TOOL_GENERATE = _fn("generate_sql", "Write a SQLite SELECT query for a data request. "
-                    "Returns the SQL text; run it with run_sql.",
-                    {"question": {"type": "string",
-                                  "description": "What data the query must return"}},
-                    ["question"])
-
 NUDGE = ("You answered without calling any tool. Numbers must come from tools: call "
          "run_sql (and calculator if needed) first, then give the final answer. If the "
          "database cannot answer, reply with CANNOT ANSWER: and the reason.")
@@ -118,6 +98,21 @@ DUPLICATE_NOTE = ("You already made this exact call at step {step}. Its result i
 
 EMPTY_RETRY = ("Your last reply was empty (the tool call could not be read). Try again: "
                "call ONE tool with valid JSON arguments, or give the final answer as text.")
+
+TRUNCATED_RETRY = ("Your last reply was cut off before it finished (output length limit). "
+                   "Reply again, shorter: call ONE tool, or give only the final answer.")
+
+INVALID_ARGS = ("Invalid arguments for {name}: {errors}. Call it again with arguments that "
+                "match this schema: {schema}")
+
+
+def is_retryable(exc):
+    """Transient failures worth retrying: Ollama unreachable or timed out, rate limited
+    (429) or a server error (5xx). Anything else (404 model not found, 400, a bug in our
+    code) fails the same way every time, so retrying only wastes time."""
+    if isinstance(exc, OllamaHTTPError):
+        return exc.status == 429 or exc.status >= 500
+    return isinstance(exc, (ConnectionError, TimeoutError))
 
 REFUSAL_RE = re.compile(r"cannot answer|can't answer|can not answer|unable to answer|"
                         r"not (?:available|possible|present|stored|recorded|included|in the database)|"
@@ -224,12 +219,14 @@ def parse_text_tool_call(content):
 class Agent:
     def __init__(self, llm, db_path, sql_mode="inline", max_steps=8, token_budget=20000,
                  row_limit=DEFAULT_ROW_LIMIT, nudge=True, guards=True, max_pushbacks=2,
-                 cost_cap_usd=None, max_retries=3):
+                 cost_cap_usd=None, max_retries=3, retry_backoff=1.0, sleep=time.sleep):
         """guards=True turns on the orchestration guards (error hints, refusal-after-error
         push-back, grounding check, duplicate-call cache, extra prompt rules).
         guards=False reproduces the first version of the loop, for before/after numbers.
         cost_cap_usd: stop the run once its notional cost (slide 20 rates) reaches this.
-        max_retries: how many failed model calls / unusable replies a run may retry."""
+        max_retries: how many failed model calls / unusable replies a run may retry.
+        retry_backoff: seconds to wait before the first retry of a failed model call,
+        doubled for each further one (1 s, 2 s, 4 s). sleep is injectable for tests."""
         if sql_mode not in ("inline", "tool"):
             raise ValueError("sql_mode must be 'inline' or 'tool'")
         self.llm = llm
@@ -243,6 +240,8 @@ class Agent:
         self.max_pushbacks = max_pushbacks
         self.cost_cap_usd = cost_cap_usd
         self.max_retries = max_retries
+        self.retry_backoff = retry_backoff
+        self.sleep = sleep
         self.schema = get_schema(db_path)
         self.columns = column_index(db_path)
         tables = describe_table(db_path)["tables"]
@@ -251,12 +250,22 @@ class Agent:
         if sql_mode == "inline":
             self.system = INLINE_SYSTEM.format(rules=rules, definitions=DEFINITIONS,
                                                schema=self.schema)
-            self.tools = [TOOL_RUN_SQL, TOOL_CALC, TOOL_DESCRIBE]
+            names = ["run_sql", "calculator", "describe_table"]
         else:
             self.system = TOOL_SYSTEM.format(rules=rules, definitions=DEFINITIONS,
                                              tables=", ".join(tables))
-            self.tools = [TOOL_GENERATE, TOOL_RUN_SQL, TOOL_CALC, TOOL_DESCRIBE]
-        self.tool_names = {t["function"]["name"] for t in self.tools}
+            names = ["generate_sql", "run_sql", "calculator", "describe_table"]
+        bound = {
+            "run_sql": replace(RUN_SQL, fn=lambda a: run_sql(db_path, a["query"],
+                                                             self.row_limit)),
+            "calculator": replace(CALCULATOR, fn=lambda a: calculator(a["expression"])),
+            "describe_table": replace(DESCRIBE_TABLE,
+                                      fn=lambda a: describe_table(db_path, a.get("table"))),
+            "generate_sql": replace(GENERATE_SQL, fn=None),  # needs the run record
+        }
+        self.registry = {n: bound[n] for n in names}
+        self.tools = [t.spec() for t in self.registry.values()]
+        self.tool_names = set(names)
 
     # ------------------------------------------------------------ tools
 
@@ -274,27 +283,41 @@ class Agent:
         return {"ok": True, "sql": sql}
 
     def dispatch(self, call, record):
+        """Run one tool call through its contract: check the arguments against the
+        tool's input_schema, run it, check the result against its output_schema."""
         name, args = call.get("name"), call.get("arguments") or {}
-        if name not in self.tool_names:
+        tool = self.registry.get(name)
+        if tool is None:
+            record["invalid_tool_calls"] += 1
             return {"ok": False, "error": f"unknown tool {name!r}. "
                                           f"Available tools: {sorted(self.tool_names)}"}
+        if not isinstance(args, dict):
+            args = {}
+        args = {k: v for k, v in args.items() if v is not None}
+        if name == "run_sql" and "query" not in args and "sql" in args:
+            args["query"] = args.pop("sql")  # a common slip by small models
+        errors = validate(args, tool.input_schema)
+        if errors:
+            record["invalid_tool_calls"] += 1
+            return {"ok": False, "error": INVALID_ARGS.format(
+                name=name, errors="; ".join(errors),
+                schema=json.dumps(tool.input_schema["properties"]))}
+        if name == "run_sql":
+            record["sql"].append(args["query"])
         try:
-            if name == "run_sql":
-                query = args.get("query") or args.get("sql")
-                if not query:
-                    return {"ok": False, "error": "run_sql needs a 'query' argument"}
-                record["sql"].append(query)
-                result = run_sql(self.db_path, query, self.row_limit)
-                return self._annotate(result) if self.guards else result
-            if name == "calculator":
-                return calculator(args.get("expression", ""))
-            if name == "describe_table":
-                return describe_table(self.db_path, args.get("table") or None)
-            if name == "generate_sql":
-                return self._generate_sql(args.get("question") or "", record)
+            result = (self._generate_sql(args["question"], record) if name == "generate_sql"
+                      else tool.fn(args))
         except Exception as e:  # a tool must never crash the loop
             return {"ok": False, "error": f"{name} failed: {type(e).__name__}: {e}"}
-        return {"ok": False, "error": f"tool {name!r} not implemented"}
+        errors = validate(result, tool.output_schema)
+        if errors:
+            record["tool_output_errors"] += 1
+            return {"ok": False, "error": f"{name} returned malformed output "
+                                          f"({'; '.join(errors)}). This is a tool fault, "
+                                          "not your mistake; try another way."}
+        if name == "run_sql" and self.guards:
+            result = self._annotate(result)
+        return result
 
     # ------------------------------------------------------------ guards
 
@@ -388,7 +411,8 @@ class Agent:
                   "used_tools": False, "nudged": False, "empty_replies": 0,
                   "guard_pushbacks": [], "duplicate_calls": 0,
                   "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
-                  "cost_usd": 0.0, "retries": 0, "seconds": 0.0}
+                  "cost_usd": 0.0, "retries": 0, "retry_reasons": [],
+                  "invalid_tool_calls": 0, "tool_output_errors": 0, "seconds": 0.0}
         messages = [{"role": "system", "content": self.system},
                     {"role": "user", "content": question}]
 
@@ -398,11 +422,12 @@ class Agent:
         def cost():
             return notional_cost(record["prompt_tokens"], record["completion_tokens"])
 
-        def retry():
+        def retry(reason):
             """Use one retry; False once the run has used them all."""
             if record["retries"] >= self.max_retries:
                 return False
             record["retries"] += 1
+            record["retry_reasons"].append(reason)
             return True
 
         done_calls = {}  # (name, args json) -> (step, result), for the duplicate cache
@@ -418,7 +443,9 @@ class Agent:
                 res = self.llm.chat(messages, tools=self.tools)
             except Exception as e:
                 record["error"] = f"{type(e).__name__}: {e}"
-                if retry():
+                if is_retryable(e) and retry(f"model_call:{type(e).__name__}"):
+                    # exponential backoff: give a busy or restarting server time
+                    self.sleep(self.retry_backoff * 2 ** (record["retries"] - 1))
                     continue
                 record["status"] = "error"
                 break
@@ -428,7 +455,15 @@ class Agent:
             record["completion_tokens"] += res.completion_tokens
 
             calls = res.tool_calls or parse_text_tool_call(res.content)
+            if res.done_reason == "length" and not calls:
+                # cut off mid-reply: the text is incomplete, never accept it as an answer
+                if not retry("truncated"):
+                    record["status"] = "retry_cap"
+                    break
+                messages.append({"role": "user", "content": TRUNCATED_RETRY})
+                continue
             if calls:
+                invalid_before = record["invalid_tool_calls"]
                 messages.append({"role": "assistant", "content": res.content or "",
                                  "tool_calls": [{"function": {"name": c["name"],
                                                               "arguments": c["arguments"]}}
@@ -452,6 +487,11 @@ class Agent:
                                                  "result": result})
                     messages.append({"role": "tool", "tool_name": c["name"],
                                      "content": to_text(result)})
+                # the error message above already tells the model exactly what to fix
+                if record["invalid_tool_calls"] > invalid_before and \
+                        not retry("invalid_tool_call"):
+                    record["status"] = "retry_cap"
+                    break
                 continue
 
             answer = (res.content or "").strip()
@@ -459,7 +499,7 @@ class Agent:
                 # Ollama returns an empty message when the model wrote a tool call it
                 # could not parse. Do not accept "" as an answer; ask again.
                 record["empty_replies"] += 1
-                if not retry():
+                if not retry("empty_reply"):
                     record["status"] = "retry_cap"
                     break
                 messages.append({"role": "user", "content": EMPTY_RETRY})

@@ -17,7 +17,7 @@ python -m sqlagent.evaluate
 ```
 
 `build_db` rebuilds `data/shop.db` from seed 42 (identical data on every machine).
-`unittest` runs 95 offline tests (no Ollama needed; the model is faked).
+`unittest` runs 112 offline tests (no Ollama needed; the model is faked).
 `evaluate` runs 19 questions × 3 trials and writes `runs/qwen2.5-3b_inline/`.
 
 > Windows: if `python` opens the Microsoft Store, use `py` instead, or turn off the
@@ -54,7 +54,8 @@ python -m sqlagent.evaluate --only q13,q15 --trials 1
 ```
 sqlagent/
   build_db.py    seeded SQLite builder: customers, products, orders, order_items
-  tools.py       run_sql (read-only, guarded, row limit), calculator, describe_table
+  tools.py       run_sql (read-only, guarded, row limit), calculator, describe_table;
+                 the Tool contract (input/output schema) and its validator
   llm.py         Ollama /api/chat client (urllib) with a per-call token ledger
   agent.py       the agent loop: step cap, token budget, cost cap, retries, final status
   evaluate.py    expected answers, answer checker, pass@1 / pass^k, failure labels
@@ -100,6 +101,25 @@ question ─► Agent loop (max 8 steps, 20k-token budget)
 - `--max-retries 3` (default): a failed model call (Ollama down, timeout) or an empty reply
   is retried, at most 3 times per run. After that the run ends with `error` or `retry_cap`.
   The record's `retries` field shows how many were used.
+
+**Tool contracts and smarter retry (Assignment 3).**
+- Every tool is a `Tool` in `tools.py`: name, description, **input schema** and **output
+  schema**. The model is sent the input schema. The agent checks the arguments against it
+  *before* the tool runs (a bad call never reaches the database) and checks the result
+  against the output schema *after* (a broken tool is reported, not passed on). The checker
+  is a small JSON Schema subset written with the standard library.
+- An invalid call gets back the exact errors (`$.query must be string, got int`) and the
+  schema to follow, and counts as one retry.
+- Retries are chosen by cause, each recorded in `retry_reasons`:
+  - Ollama unreachable, timed out, 429 or 5xx: retried after 1 s, 2 s, 4 s (exponential
+    backoff, `retry_backoff`).
+  - 404 (model not found), 400, or a bug in our code: not retried, since it would fail the
+    same way.
+  - A reply cut off by the output limit (`done_reason = length`): never accepted as an
+    answer; the model is asked to reply again, shorter.
+  - Empty replies and invalid tool calls: retried with a message saying what to fix.
+- All of them share the run's retry budget (`--max-retries`), and a retry never starts once
+  the cost cap is reached.
 
 **Orchestration guards** (on by default; `--no-guards` turns them off to reproduce the first
 version). These were added after reading every failed trace of the first run
@@ -175,8 +195,12 @@ do not fit Ollama's small default context, which it truncates silently),
   wrote 42.11%, which is within 0.01 of the true 42.10%. The looser first checker passed it.
 - `python -m sqlagent.evaluate --rescore runs/<tag>` re-judges a saved log with the current
   checker, without calling the model, so old and new runs are scored the same way.
-- pass@1 is the mean success over all runs. pass^3 is the share of questions that passed in
-  all 3 trials.
+- pass@1 is the mean success over all runs. pass@3 is the share of questions that passed in
+  at least one of 3 trials ("can it do it at all?", unbiased estimator of Chen et al. 2021).
+  pass^3 is the share that passed in all 3 ("can we rely on it?"). Always
+  pass^k ≤ pass@1 ≤ pass@k. Re-scoring the saved 3B inline run gives pass@1 0.684,
+  pass@3 0.789, pass^3 0.579: about a fifth of the questions the model *can* answer, it
+  doesn't answer reliably.
 - Failure labels: `wrong_result`, `answer_not_from_tools`, `sql_error_unrecovered`,
   `no_tool_guess`, `false_refusal`, `made_up_answer`, `step_cap`, `budget_cap`, `cost_cap`,
   `retry_cap`, `error`.
