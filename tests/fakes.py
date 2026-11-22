@@ -19,11 +19,12 @@ class FakeLLM:
     def __init__(self, replies, raise_on=None):
         self.replies = list(replies)
         self.seen = []
-        self.raise_on = raise_on  # index of call that raises
+        # index (or set of indexes) of the calls that raise
+        self.raise_on = {raise_on} if isinstance(raise_on, int) else set(raise_on or ())
 
     def chat(self, messages, tools=None):
         self.seen.append({"messages": [dict(m) for m in messages], "tools": tools})
-        if self.raise_on is not None and len(self.seen) - 1 == self.raise_on:
+        if len(self.seen) - 1 in self.raise_on:
             raise ConnectionError("ollama is not running")
         if not self.replies:
             raise AssertionError("FakeLLM ran out of scripted replies")

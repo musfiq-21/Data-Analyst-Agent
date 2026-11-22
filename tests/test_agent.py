@@ -83,11 +83,42 @@ class AgentLoopTests(unittest.TestCase):
         self.assertEqual(run["status"], "budget_cap")
         self.assertEqual(run["steps"], 2)
 
-    def test_llm_failure_gives_error_status(self):
-        agent, _ = self.agent([], raise_on=0)
+    def test_llm_failure_gives_error_status_after_retries(self):
+        agent, llm = self.agent([], raise_on=range(10), max_retries=3)
         run = agent.run("q")
         self.assertEqual(run["status"], "error")
         self.assertIn("ollama", run["error"])
+        self.assertEqual(len(llm.seen), 4)  # first try + 3 retries
+        self.assertEqual(run["retries"], 3)
+
+    def test_failed_call_is_retried_and_run_recovers(self):
+        agent, llm = self.agent([reply(content="CANNOT ANSWER: no phone column")],
+                                raise_on={0, 1})
+        run = agent.run("q")
+        self.assertEqual(run["status"], "ok")
+        self.assertEqual(run["retries"], 2)
+        self.assertIsNone(run["error"])
+
+    def test_cost_cap_stops_the_run(self):
+        # each step: 4000 in x $2/M + 1000 out x $8/M = $0.016
+        big = [reply(tool_calls=[call("run_sql", query="SELECT 1")],
+                     prompt_tokens=4000, completion_tokens=1000) for _ in range(5)]
+        agent, _ = self.agent(big, cost_cap_usd=0.03, token_budget=10**6)
+        run = agent.run("q")
+        self.assertEqual(run["status"], "cost_cap")
+        self.assertEqual(run["steps"], 2)
+        self.assertAlmostEqual(run["cost_usd"], 0.032)
+
+    def test_cost_is_recorded_without_a_cap(self):
+        agent, _ = self.agent([reply(content="CANNOT ANSWER", prompt_tokens=1000,
+                                     completion_tokens=100)])
+        self.assertAlmostEqual(agent.run("q")["cost_usd"], 0.0028)
+
+    def test_empty_replies_stop_at_retry_cap(self):
+        agent, _ = self.agent([reply(content="") for _ in range(6)], max_retries=3)
+        run = agent.run("q")
+        self.assertEqual(run["status"], "retry_cap")
+        self.assertEqual(run["empty_replies"], 4)
 
     def test_unknown_tool_is_reported_back(self):
         agent, llm = self.agent([
@@ -179,7 +210,8 @@ class AgentLoopTests(unittest.TestCase):
         agent, _ = self.agent([reply(content="CANNOT ANSWER")])
         run = agent.run("q")
         for key in ["question", "status", "final_answer", "tool_calls", "sql", "steps",
-                    "prompt_tokens", "completion_tokens", "total_tokens", "seconds", "model"]:
+                    "prompt_tokens", "completion_tokens", "total_tokens", "cost_usd",
+                    "retries", "seconds", "model"]:
             self.assertIn(key, run)
 
 

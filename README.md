@@ -17,7 +17,7 @@ python -m sqlagent.evaluate
 ```
 
 `build_db` rebuilds `data/shop.db` from seed 42 (identical data on every machine).
-`unittest` runs 91 offline tests (no Ollama needed; the model is faked).
+`unittest` runs 95 offline tests (no Ollama needed; the model is faked).
 `evaluate` runs 19 questions × 3 trials and writes `runs/qwen2.5-3b_inline/`.
 
 > Windows: if `python` opens the Microsoft Store, use `py` instead, or turn off the
@@ -56,7 +56,7 @@ sqlagent/
   build_db.py    seeded SQLite builder: customers, products, orders, order_items
   tools.py       run_sql (read-only, guarded, row limit), calculator, describe_table
   llm.py         Ollama /api/chat client (urllib) with a per-call token ledger
-  agent.py       the agent loop: step cap, token budget, final status
+  agent.py       the agent loop: step cap, token budget, cost cap, retries, final status
   evaluate.py    expected answers, answer checker, pass@1 / pass^k, failure labels
   ask.py         ask one question and print the tool trace
 data/
@@ -88,7 +88,18 @@ question ─► Agent loop (max 8 steps, 20k-token budget)
               └──────────► appended as a `tool` message, loop continues
 ```
 
-**Final status** of every run: `ok`, `step_cap`, `budget_cap` or `error`.
+**Final status** of every run: `ok`, `step_cap`, `budget_cap`, `cost_cap`, `retry_cap` or
+`error`.
+
+**Cost ledger, cost cap and retries (Assignment 2).**
+- Every run records `cost_usd`, its notional cost at the Lecture 2 teaching rates ($2 per
+  million input tokens, $8 per million output), from the same token counts as the ledger in
+  `llm.py`. `summary.json` adds the total and per-run cost.
+- `--cost-cap 0.05` stops a run (status `cost_cap`) before the call that would start once
+  its cost has reached $0.05. No cap by default.
+- `--max-retries 3` (default): a failed model call (Ollama down, timeout) or an empty reply
+  is retried, at most 3 times per run. After that the run ends with `error` or `retry_cap`.
+  The record's `retries` field shows how many were used.
 
 **Orchestration guards** (on by default; `--no-guards` turns them off to reproduce the first
 version). These were added after reading every failed trace of the first run
@@ -167,7 +178,8 @@ do not fit Ollama's small default context, which it truncates silently),
 - pass@1 is the mean success over all runs. pass^3 is the share of questions that passed in
   all 3 trials.
 - Failure labels: `wrong_result`, `answer_not_from_tools`, `sql_error_unrecovered`,
-  `no_tool_guess`, `false_refusal`, `made_up_answer`, `step_cap`, `budget_cap`, `error`.
+  `no_tool_guess`, `false_refusal`, `made_up_answer`, `step_cap`, `budget_cap`, `cost_cap`,
+  `retry_cap`, `error`.
 
 Known checker limitations (spot-check the `runs.jsonl` records behind your headline numbers):
 - The number check is lenient. An answer that lists many numbers can match by accident.

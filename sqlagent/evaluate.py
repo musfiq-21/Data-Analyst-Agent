@@ -101,7 +101,7 @@ def pass_hat_k(results):
 
 def classify_failure(run, expected_kind):
     """Label why a failed run failed (used for the failure analysis)."""
-    if run.get("status") in ("step_cap", "budget_cap", "error"):
+    if run.get("status") in ("step_cap", "budget_cap", "cost_cap", "retry_cap", "error"):
         return run["status"]
     answer = run.get("final_answer") or ""
     if expected_kind == "unanswerable":
@@ -153,8 +153,11 @@ def summarize(records, meta, questions):
     results = defaultdict(list)
     failures, statuses, pushbacks = Counter(), Counter(), Counter()
     examples = {}
-    total_tokens = total_seconds = dup_runs = 0
+    total_tokens = total_seconds = dup_runs = total_retries = 0
+    total_cost = 0.0
     for r in records:
+        total_cost += r.get("cost_usd", 0.0)
+        total_retries += r.get("retries", 0)
         results[r["id"]].append(r["passed"])
         statuses[r["status"]] += 1
         total_tokens += r["total_tokens"]
@@ -179,6 +182,9 @@ def summarize(records, meta, questions):
         "guard_pushbacks": dict(pushbacks), "runs_with_duplicate_calls": dup_runs,
         "avg_tokens_per_run": round(total_tokens / max(n, 1), 1),
         "avg_seconds_per_run": round(total_seconds / max(n, 1), 2),
+        "total_cost_usd": round(total_cost, 6),
+        "avg_cost_usd_per_run": round(total_cost / max(n, 1), 6),
+        "total_retries": total_retries,
         "failure_examples": examples,
         "per_question": {qid: {"passes": sum(results[qid]), "trials": len(results[qid])}
                          for qid in order},
@@ -215,7 +221,10 @@ def render_markdown(s, questions):
              f"- guard push-backs: {s['guard_pushbacks']}, "
              f"runs with duplicate calls: {s['runs_with_duplicate_calls']}",
              f"- avg tokens/run: {s['avg_tokens_per_run']}, "
-             f"avg seconds/run: {s['avg_seconds_per_run']}", "",
+             f"avg seconds/run: {s['avg_seconds_per_run']}",
+             f"- notional cost: {s.get('total_cost_usd', 0):.4f} USD total, "
+             f"{s.get('avg_cost_usd_per_run', 0):.6f} USD/run; "
+             f"retries: {s.get('total_retries', 0)}", "",
              "| id | category | passes |", "|---|---|---|"]
     cats = {q["id"]: q["category"] for q in questions}
     for qid, r in s["per_question"].items():
@@ -268,6 +277,9 @@ def main(argv=None):
     ap.add_argument("--temperature", type=float, default=0.3)
     ap.add_argument("--max-steps", type=int, default=8)
     ap.add_argument("--token-budget", type=int, default=20000)
+    ap.add_argument("--cost-cap", type=float, default=None,
+                    help="stop a run once its notional cost reaches this many USD")
+    ap.add_argument("--max-retries", type=int, default=3)
     ap.add_argument("--no-nudge", action="store_true",
                     help="disable the 'use a tool first' reminder (for before/after comparison)")
     ap.add_argument("--no-guards", action="store_true",
@@ -302,7 +314,8 @@ def main(argv=None):
     llm = OllamaChat(args.model, temperature=args.temperature)
     agent = Agent(llm, args.db, sql_mode=args.sql_mode, max_steps=args.max_steps,
                   token_budget=args.token_budget, nudge=not args.no_nudge,
-                  guards=not args.no_guards)
+                  guards=not args.no_guards, cost_cap_usd=args.cost_cap,
+                  max_retries=args.max_retries)
 
     records = []
     t_start = time.perf_counter()
@@ -321,11 +334,13 @@ def main(argv=None):
                 mark = "PASS" if passed else f"FAIL ({failure})"
                 ans = (run["final_answer"] or "").replace("\n", " ")[:90]
                 print(f"{q['id']} t{trial} {run['status']:10s} {mark:30s} "
-                      f"{run['total_tokens']:6d} tok {run['seconds']:6.1f}s | {ans}")
+                      f"{run['total_tokens']:6d} tok ${run['cost_usd']:.4f} "
+                      f"{run['seconds']:6.1f}s | {ans}")
 
     meta = {"model": args.model, "sql_mode": args.sql_mode, "trials": args.trials,
             "temperature": args.temperature, "max_steps": args.max_steps,
-            "token_budget": args.token_budget, "nudge": not args.no_nudge,
+            "token_budget": args.token_budget, "cost_cap_usd": args.cost_cap,
+            "max_retries": args.max_retries, "nudge": not args.no_nudge,
             "guards": not args.no_guards,
             "wall_seconds": round(time.perf_counter() - t_start, 1)}
     summary = summarize(records, meta, questions)

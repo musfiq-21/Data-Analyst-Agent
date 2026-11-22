@@ -13,6 +13,7 @@ import json
 import re
 import time
 
+from sqlagent.llm import notional_cost
 from sqlagent.tools import (DEFAULT_ROW_LIMIT, calculator, column_index, describe_table,
                             get_schema, run_sql, to_text)
 
@@ -222,10 +223,13 @@ def parse_text_tool_call(content):
 
 class Agent:
     def __init__(self, llm, db_path, sql_mode="inline", max_steps=8, token_budget=20000,
-                 row_limit=DEFAULT_ROW_LIMIT, nudge=True, guards=True, max_pushbacks=2):
+                 row_limit=DEFAULT_ROW_LIMIT, nudge=True, guards=True, max_pushbacks=2,
+                 cost_cap_usd=None, max_retries=3):
         """guards=True turns on the orchestration guards (error hints, refusal-after-error
         push-back, grounding check, duplicate-call cache, extra prompt rules).
-        guards=False reproduces the first version of the loop, for before/after numbers."""
+        guards=False reproduces the first version of the loop, for before/after numbers.
+        cost_cap_usd: stop the run once its notional cost (slide 20 rates) reaches this.
+        max_retries: how many failed model calls / unusable replies a run may retry."""
         if sql_mode not in ("inline", "tool"):
             raise ValueError("sql_mode must be 'inline' or 'tool'")
         self.llm = llm
@@ -237,6 +241,8 @@ class Agent:
         self.nudge = nudge
         self.guards = guards
         self.max_pushbacks = max_pushbacks
+        self.cost_cap_usd = cost_cap_usd
+        self.max_retries = max_retries
         self.schema = get_schema(db_path)
         self.columns = column_index(db_path)
         tables = describe_table(db_path)["tables"]
@@ -382,12 +388,22 @@ class Agent:
                   "used_tools": False, "nudged": False, "empty_replies": 0,
                   "guard_pushbacks": [], "duplicate_calls": 0,
                   "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
-                  "seconds": 0.0}
+                  "cost_usd": 0.0, "retries": 0, "seconds": 0.0}
         messages = [{"role": "system", "content": self.system},
                     {"role": "user", "content": question}]
 
         def used():
             return record["prompt_tokens"] + record["completion_tokens"]
+
+        def cost():
+            return notional_cost(record["prompt_tokens"], record["completion_tokens"])
+
+        def retry():
+            """Use one retry; False once the run has used them all."""
+            if record["retries"] >= self.max_retries:
+                return False
+            record["retries"] += 1
+            return True
 
         done_calls = {}  # (name, args json) -> (step, result), for the duplicate cache
 
@@ -395,12 +411,18 @@ class Agent:
             if used() >= self.token_budget:
                 record["status"] = "budget_cap"
                 break
+            if self.cost_cap_usd is not None and cost() >= self.cost_cap_usd:
+                record["status"] = "cost_cap"
+                break
             try:
                 res = self.llm.chat(messages, tools=self.tools)
             except Exception as e:
-                record["status"] = "error"
                 record["error"] = f"{type(e).__name__}: {e}"
+                if retry():
+                    continue
+                record["status"] = "error"
                 break
+            record["error"] = None  # an earlier failed attempt was retried successfully
             record["steps"] = step
             record["prompt_tokens"] += res.prompt_tokens
             record["completion_tokens"] += res.completion_tokens
@@ -437,6 +459,9 @@ class Agent:
                 # Ollama returns an empty message when the model wrote a tool call it
                 # could not parse. Do not accept "" as an answer; ask again.
                 record["empty_replies"] += 1
+                if not retry():
+                    record["status"] = "retry_cap"
+                    break
                 messages.append({"role": "user", "content": EMPTY_RETRY})
                 continue
             if (self.nudge and not record["used_tools"] and not record["nudged"]
@@ -457,5 +482,6 @@ class Agent:
             record["status"] = "step_cap"
 
         record["total_tokens"] = used()
+        record["cost_usd"] = cost()
         record["seconds"] = round(time.perf_counter() - t0, 3)
         return record
